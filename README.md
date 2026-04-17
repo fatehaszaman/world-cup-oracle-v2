@@ -225,3 +225,39 @@ world-cup-oracle-v2/
 
 ## License
 MIT
+
+---
+
+## 2018 World Cup Backtest (v2)
+
+> Cross-tournament validation: does the v2 model generalise to a different World Cup era?
+
+### Bracket Prediction Score (BPS) — 2018
+
+| Stage        | Correct | Max | Pts |
+|--------------|---------|-----|-----|
+| R16 (×1pt)   | 14/16   | 16  | 14  |
+| QF (×2pt)    | 4/8     | 16  | 8   |
+| SF (×3pt)    | 1/4     | 12  | 3   |
+| Finalist (×5)| 0/2     | 10  | 0   |
+| Winner (×10) | 0/1     | 10  | 0   |
+| **Total**    |         | **64** | **25** |
+| **Result**   |         |     | ✗ **FAIL** |
+
+**Winner predicted:** Germany — **Actual:** France (4–2 Croatia)
+
+### Root Cause Analysis
+The v2 model failed 2018 for two structural reasons:
+
+1. **Recency bias in squad values** — Germany's 2014 champion roster still carried high squad-value scores despite key retirements. The model had no age-decay or form-cycle correction to detect a team past its peak.
+2. **Penalty-shootout blindspot** — Croatia's path to the final required winning three consecutive knockout shootouts (Denmark R16, Russia QF, England SF). The model's match-simulation assigns probabilities based on 90-minute composite scores; it has no shootout-specialist or clutch-performance coefficient.
+
+### Cross-Tournament Validation Summary
+
+| Tournament      | Model | BPS | /64 | Pass? |
+|-----------------|-------|-----|-----|-------|
+| 2022 World Cup  | v1    | 40  | 64  | ✗ FAIL |
+| 2022 World Cup  | v2    | ~48 | 64  | ✓ PASS |
+| 2018 World Cup  | v2    | 25  | 64  | ✗ FAIL |
+
+> 2018 failure motivates **[world-cup-oracle-v3](https://github.com/fatehaszaman/world-cup-oracle-v3)**, which adds age-decay curves, form-cycle detection, and a shootout-specialist coefficient to address both root causes above.
