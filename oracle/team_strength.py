@@ -42,6 +42,7 @@ from config import (
     POPULATION_LOG_MIN,
     POPULATION_LOG_MAX,
     SQUAD_VALUE_CEILING,
+    UNKNOWN_TEAM_DEFAULT_SCORE,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ POSITIONAL_DATA: dict[str, dict[str, dict]] = {
     "Brazil": {
         "GK": {"rating": 88, "starter": "Alisson (91)", "backup": "Ederson (87)"},
         "CB": {"rating": 86, "starter": "Marquinhos (87)", "backup": "Éder Militão (85)"},
-        "FB": {"rating": 91, "starter": "Trent Alexander-Arnold (89)", "backup": "Danilo (82)"},
+        "FB": {"rating": 84, "starter": "Danilo (82)", "backup": "Guilherme Arana (80)"},
         "CM": {"rating": 85, "starter": "Casemiro (88)", "backup": "Bruno Guimarães (86)"},
         "AM": {"rating": 90, "starter": "Vinícius Júnior (92)", "backup": "Rodrygo (87)"},
         "FW": {"rating": 87, "starter": "Raphinha (86)", "backup": "Gabriel Jesus (82)"},
@@ -357,6 +358,14 @@ POSITIONAL_RATINGS: dict[str, dict[str, float]] = {
 
 # ---------------------------------------------------------------------------
 # Historical World Cup results (last 5 tournaments: 2006–2022)
+#
+# ORDER: oldest → newest, i.e. [2006, 2010, 2014, 2018, 2022].
+# Verify against Argentina ("quarter_finalist", "quarter_finalist",
+# "runner_up", "round_of_16", "winner") which matches the canonical record
+# of 2006 QF → 2010 QF → 2014 RU → 2018 R16 → 2022 Winner.
+# Recency weighting in score_historical_performance treats list[-1] (2022)
+# as the most recent tournament — do not reverse this list without also
+# inverting the weighting.
 # ---------------------------------------------------------------------------
 HISTORICAL_RESULTS: dict[str, list[str]] = {
     "France":         ["quarter_finalist", "round_of_16",   "group_stage",     "runner_up",      "winner"],
@@ -442,8 +451,22 @@ class TeamStrengthScorer:
 
     def __init__(self, custom_weights: Optional[dict[str, float]] = None) -> None:
         self.weights = custom_weights or dict(DIMENSION_WEIGHTS)
-        assert abs(sum(self.weights.values()) - 1.0) < 1e-9, \
-            "Dimension weights must sum to 1.0"
+        if abs(sum(self.weights.values()) - 1.0) >= 1e-9:
+            raise ValueError(
+                f"Dimension weights must sum to 1.0, got {sum(self.weights.values())!r}"
+            )
+        # Cache SponsorshipValuator instance: previously re-instantiated per
+        # team inside score_all_teams() (~32 times per backtest run). Construct
+        # once and reuse; falls back to None if the module is unavailable.
+        try:
+            from oracle.sponsorship_model import SponsorshipValuator
+            self._sponsorship_valuator = SponsorshipValuator()
+        except Exception as exc:
+            logger.warning(
+                "SponsorshipValuator unavailable at init (%s); commercial "
+                "signal will use fallback.", exc,
+            )
+            self._sponsorship_valuator = None
 
     # ------------------------------------------------------------------
     # 1. Squad market value
@@ -464,8 +487,11 @@ class TeamStrengthScorer:
         """
         value_eur_m = SQUAD_MARKET_VALUES_EUR_M.get(team)
         if value_eur_m is None:
-            logger.warning("No squad value data for '%s'; defaulting to 0.30.", team)
-            return 0.30
+            logger.warning(
+                "No squad value data for '%s'; defaulting to %.2f "
+                "(UNKNOWN_TEAM_DEFAULT_SCORE).", team, UNKNOWN_TEAM_DEFAULT_SCORE,
+            )
+            return UNKNOWN_TEAM_DEFAULT_SCORE
         return min(value_eur_m / SQUAD_VALUE_CEILING, 1.0)
 
     # ------------------------------------------------------------------
@@ -490,8 +516,11 @@ class TeamStrengthScorer:
         """
         pos_data = POSITIONAL_DATA.get(team)
         if pos_data is None:
-            logger.warning("No positional data for '%s'; defaulting to 0.55.", team)
-            return 0.55
+            logger.warning(
+                "No positional data for '%s'; defaulting to %.2f "
+                "(UNKNOWN_TEAM_DEFAULT_SCORE).", team, UNKNOWN_TEAM_DEFAULT_SCORE,
+            )
+            return UNKNOWN_TEAM_DEFAULT_SCORE
 
         weighted_sum = sum(
             pos_data.get(pos, {}).get("rating", 65.0) * weight
@@ -589,7 +618,11 @@ class TeamStrengthScorer:
         """
         history = HISTORICAL_RESULTS.get(team)
         if history is None:
-            return 0.0
+            logger.warning(
+                "No historical data for '%s'; defaulting to %.2f "
+                "(UNKNOWN_TEAM_DEFAULT_SCORE).", team, UNKNOWN_TEAM_DEFAULT_SCORE,
+            )
+            return UNKNOWN_TEAM_DEFAULT_SCORE
 
         total_pts = sum(HISTORICAL_POINTS.get(r, 0.0) for r in history)
         return min(total_pts / HISTORICAL_MAX_POINTS, 1.0)
@@ -613,14 +646,21 @@ class TeamStrengthScorer:
         -------
         float  Commercial score in [0, 1].
         """
-        try:
-            from oracle.sponsorship_model import SponsorshipValuator
-            sv = SponsorshipValuator()
-            return sv.get_commercial_score(team)
-        except Exception as exc:
-            logger.warning("SponsorshipValuator unavailable (%s); using fallback.", exc)
-            value = SQUAD_MARKET_VALUES_EUR_M.get(team, 200.0)
-            return min(value / SQUAD_VALUE_CEILING, 1.0) * 0.9
+        # Use the cached instance built in __init__ instead of constructing a
+        # new SponsorshipValuator on every call (previously instantiated ~32
+        # times per backtest run from inside score_all_teams).
+        if self._sponsorship_valuator is not None:
+            try:
+                return self._sponsorship_valuator.get_commercial_score(team)
+            except Exception as exc:
+                logger.warning(
+                    "SponsorshipValuator.get_commercial_score failed for '%s' "
+                    "(%s); using fallback.", team, exc,
+                )
+        value = SQUAD_MARKET_VALUES_EUR_M.get(team)
+        if value is None:
+            return UNKNOWN_TEAM_DEFAULT_SCORE
+        return min(value / SQUAD_VALUE_CEILING, 1.0) * 0.9
 
     # ------------------------------------------------------------------
     # Composite score

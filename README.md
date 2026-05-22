@@ -228,6 +228,20 @@ MIT
 
 ---
 
+## CHANGELOG
+
+### Engineering fixes (latest)
+- **Brazil FB starter** corrected from `Trent Alexander-Arnold` (copy-paste from England) to `Danilo` / `Guilherme Arana`. FB rating 91 → 84.
+- **Weight validation** now raises `ValueError` instead of using `assert` (asserts are stripped under `python -O` / `PYTHONOPTIMIZE=1`).
+- **`SponsorshipValuator`** is now constructed once on `TeamStrengthScorer.__init__` and cached, instead of being re-instantiated ~32 times per `score_all_teams()` call.
+- **Unknown-team fallback** unified across all sub-scorers via `config.UNKNOWN_TEAM_DEFAULT_SCORE = 0.40`. Previously squad_value→0.30, positional→0.55, historical→0.0.
+- **`HISTORICAL_RESULTS` list order** is now explicitly documented as oldest → newest (i.e. `[2006, 2010, 2014, 2018, 2022]`).
+
+### New (opt-in)
+- **`oracle/rating_distribution.py`** — turns each player rating into a `Normal(mean, sigma)` distribution sampled by the Monte Carlo engine. Lets MC propagate *rating uncertainty* on top of match-outcome randomness instead of treating ratings as zero-variance point estimates. Position-specific priors: GK 1.8, CB 2.0, FB 2.3, CM 2.5, AM 3.0, FW 3.2.
+
+---
+
 ## 2018 World Cup Backtest (v2)
 
 > Cross-tournament validation: does the v2 model generalise to a different World Cup era?

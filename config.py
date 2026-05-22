@@ -25,8 +25,9 @@ DIMENSION_WEIGHTS: dict[str, float] = {
     "commercial":         0.09,
 }
 
-assert abs(sum(DIMENSION_WEIGHTS.values()) - 1.0) < 1e-9, \
-    "Dimension weights must sum to 1.0"
+_DIM_TOTAL = sum(DIMENSION_WEIGHTS.values())
+if abs(_DIM_TOTAL - 1.0) >= 1e-9:
+    raise ValueError(f"DIMENSION_WEIGHTS must sum to 1.0, got {_DIM_TOTAL!r}")
 
 # ---------------------------------------------------------------------------
 # Positional importance weights within positional_power score
@@ -40,8 +41,9 @@ POSITION_WEIGHTS: dict[str, float] = {
     "FW": 0.15,
 }
 
-assert abs(sum(POSITION_WEIGHTS.values()) - 1.0) < 1e-9, \
-    "Position weights must sum to 1.0"
+_POS_TOTAL = sum(POSITION_WEIGHTS.values())
+if abs(_POS_TOTAL - 1.0) >= 1e-9:
+    raise ValueError(f"POSITION_WEIGHTS must sum to 1.0, got {_POS_TOTAL!r}")
 
 # ---------------------------------------------------------------------------
 # Historical performance scoring (last 5 World Cups)
@@ -110,6 +112,16 @@ HTTP_BACKOFF_BASE: float = 1.5   # seconds
 # Squad market value normalization ceiling (EUR millions)
 # ---------------------------------------------------------------------------
 SQUAD_VALUE_CEILING: float = 1_300.0
+
+# ---------------------------------------------------------------------------
+# Unknown-team fallback score (all sub-scorers)
+# ---------------------------------------------------------------------------
+# Single source of truth for what every sub-scorer returns when it has no
+# data for a team. Previously each sub-scorer used its own ad-hoc default
+# (squad_value=0.30, positional=0.55, historical=0.0), which biased the
+# composite for unseen teams in opaque ways. 0.40 corresponds to a weak
+# mid-tier non-WC qualifier on the 0–1 scale.
+UNKNOWN_TEAM_DEFAULT_SCORE: float = 0.40
 
 # ---------------------------------------------------------------------------
 # Commercial signal normalization ceilings
