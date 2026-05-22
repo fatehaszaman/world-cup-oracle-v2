@@ -673,14 +673,22 @@ class TournamentSimulator:
         Parameters
         ----------
         team : str
-        scores : dict[str, float]   Baseline composite scores.
+        scores : dict[str, float]
+            Caller-supplied composite scores. Retained for backwards
+            compatibility and used as a fallback if internal rebuild fails.
+            Note: when world_bank_data is supplied, the baseline is
+            rebuilt internally via score_all_teams(world_bank_data=...) so
+            that the baseline and perturbed variants share the same macro
+            inputs (apples-to-apples comparison).
         n_runs : int                Simulations per weight variant (5k for speed).
         weight_delta : float        Fractional weight change (0.20 = 20%).
         world_bank_data : dict, optional
-            GDP / population context passed through to score_all_teams so that
-            re-scored variants use the same macro inputs as the baseline run.
-            If omitted, score_all_teams falls back to its defaults (which may
-            differ from the macro data used to build the baseline scores).
+            GDP / population context. When provided, both the baseline and
+            the perturbed variants are scored against this data, so the
+            sensitivity deltas reflect ONLY the change in dimension weights.
+            When None, the function falls back to the caller-supplied
+            `scores` as the baseline and lets score_all_teams use its
+            defaults for the perturbed runs.
 
         Returns
         -------
@@ -693,8 +701,26 @@ class TournamentSimulator:
         from config import DIMENSION_WEIGHTS
         from oracle.team_strength import TeamStrengthScorer
 
-        # Baseline
-        baseline_df = self.run_tournament(scores, n_runs=n_runs)
+        # Baseline — when world_bank_data is supplied, rebuild the baseline
+        # scores from the SAME macro data the perturbed variants will use, so
+        # the sensitivity deltas reflect only the dimension-weight change and
+        # not a mismatch in macro inputs.
+        if world_bank_data is not None:
+            try:
+                baseline_scorer = TeamStrengthScorer()
+                baseline_scores = baseline_scorer.score_all_teams(
+                    world_bank_data=world_bank_data
+                )
+            except Exception as e:
+                logger.warning(
+                    "sensitivity_analysis: baseline rebuild failed (%s); "
+                    "falling back to caller-supplied scores.", e,
+                )
+                baseline_scores = scores
+        else:
+            baseline_scores = scores
+
+        baseline_df = self.run_tournament(baseline_scores, n_runs=n_runs)
         baseline_row = baseline_df[baseline_df["team"] == team]
         if baseline_row.empty:
             return {"error": f"Team '{team}' not found in simulation results."}
