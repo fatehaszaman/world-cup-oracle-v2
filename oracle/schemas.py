@@ -257,9 +257,12 @@ class TournamentOutcome:
     quarter_finalist_prob : float
         Probability of reaching the quarter-finals.
     round_of_16_prob : float
-        Probability of advancing past the group stage.
-    group_exit_prob : float
-        Probability of exiting in the group stage.
+        Probability of reaching (at least) the Round of 16.
+    not_reaching_r16_prob : float
+        Probability of NOT reaching the Round of 16. In a pure 32-team
+        format this equals the group-stage exit probability; in the 48-team
+        2026 format it also includes Round-of-32 exits. Equals
+        1 - round_of_16_prob.
     expected_goals_for : float
         Average goals scored per tournament run.
     expected_goals_against : float
@@ -273,7 +276,7 @@ class TournamentOutcome:
     semi_finalist_prob: float
     quarter_finalist_prob: float
     round_of_16_prob: float
-    group_exit_prob: float
+    not_reaching_r16_prob: float
     expected_goals_for: float = 0.0
     expected_goals_against: float = 0.0
     composite_score: float = 0.0
@@ -281,7 +284,7 @@ class TournamentOutcome:
     def __post_init__(self) -> None:
         probs = [
             self.champion_prob, self.finalist_prob, self.semi_finalist_prob,
-            self.quarter_finalist_prob, self.round_of_16_prob, self.group_exit_prob,
+            self.quarter_finalist_prob, self.round_of_16_prob, self.not_reaching_r16_prob,
         ]
         for p in probs:
             if not (-1e-6 <= p <= 1.0 + 1e-6):
@@ -292,7 +295,7 @@ class TournamentOutcome:
         """Cumulative probabilities should roughly sum to 1 across rounds."""
         return (
             self.champion_prob + self.finalist_prob + self.semi_finalist_prob
-            + self.quarter_finalist_prob + self.round_of_16_prob + self.group_exit_prob
+            + self.quarter_finalist_prob + self.round_of_16_prob + self.not_reaching_r16_prob
         )
 
 

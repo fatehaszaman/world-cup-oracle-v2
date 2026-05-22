@@ -28,7 +28,7 @@ only — they are not speculative.
 from __future__ import annotations
 
 import logging
-import random
+import numpy as np
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -864,9 +864,15 @@ class RefereeBiasAnalyzer:
         return results[:5]
 
     def get_random_referee(self, seed: int | None = None) -> str:
-        """Return a randomly selected referee name from the pool."""
-        rng = random.Random(seed)
-        return rng.choice(REFEREE_POOL)
+        """Return a randomly selected referee name from the pool.
+
+        Uses numpy's default_rng so callers can control the stream with the
+        same seed they use for the rest of the simulation (avoids a separate
+        uncontrolled stdlib `random` stream).
+        """
+        rng = np.random.default_rng(seed)
+        idx = int(rng.integers(0, len(REFEREE_POOL)))
+        return REFEREE_POOL[idx]
 
     def list_referees(self) -> list[str]:
         """Return all referee names in the database."""

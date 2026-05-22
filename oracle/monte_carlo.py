@@ -13,16 +13,16 @@ championship probabilities are accurate to ±0.5 percentage points.
 DEVELOPER NOTES
 ---------------
 Performance engineering:
-  - ALL match simulations are vectorized across the N_RUNS axis using
-    numpy arrays of shape (n_runs,) or (n_runs, n_teams). No Python loops
-    inside the hot path.
+  - simulate_match is vectorized across n_simulations using numpy Poisson
+    draws. The per-match hot path contains no Python loops.
   - Correlated shocks use Cholesky decomposition of a team-correlation
     matrix so that strong teams fail together (tournament upsets tend to
     cluster around referee/weather conditions affecting all matches in a day).
   - Poisson goal sampling uses numpy's built-in vectorized Poisson RNG.
-  - Parallel processing: the 50k runs are split into worker batches via
-    concurrent.futures.ProcessPoolExecutor for multi-core utilization.
-  - Memory: pre-allocate all result arrays in float32 (half the memory of
+  - Tournament runs are executed sequentially in the current implementation;
+    each run is independent and seeded deterministically from the master RNG.
+    Cross-run parallelism (ProcessPoolExecutor) is a future enhancement.
+  - Memory: result arrays are allocated in float32 (half the memory of
     float64, sufficient for probability estimates to 4 decimal places).
 
 Complexity:
@@ -37,7 +37,6 @@ from __future__ import annotations
 import logging
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -108,42 +107,6 @@ def _build_correlation_matrix(teams: list[str]) -> np.ndarray:
     return C
 
 
-def _run_tournament_chunk(
-    chunk_seed: int,
-    n_chunk: int,
-    scores: dict[str, float],
-    groups: dict[str, list[str]],
-    config_dict: dict,
-) -> np.ndarray:
-    """
-    Worker function for ProcessPoolExecutor — runs n_chunk tournament simulations.
-
-    Returns
-    -------
-    np.ndarray  shape (n_chunk, n_teams, n_rounds) of reach-round indicators.
-                float32. Columns indexed by ROUND_ORDER.
-    """
-    sim = TournamentSimulator(SimulationConfig(**config_dict))
-    rng = np.random.default_rng(chunk_seed)
-    teams = list(scores.keys())
-    n_teams = len(teams)
-    n_rounds = 6  # group, R32, R16, QF, SF, Final
-    results = np.zeros((n_chunk, n_teams, n_rounds), dtype=np.float32)
-
-    for run_i in range(n_chunk):
-        sim_rng = np.random.default_rng(rng.integers(0, 2**31))
-        outcome = sim._single_tournament_run(scores, groups, sim_rng)
-        for t_i, team in enumerate(teams):
-            for r_i, round_key in enumerate(
-                ["group_stage", "round_of_32", "round_of_16",
-                 "quarter_final", "semi_final", "final"]
-            ):
-                results[run_i, t_i, r_i] = float(
-                    outcome.get(team, {}).get(round_key, False)
-                )
-    return results
-
-
 # ---------------------------------------------------------------------------
 # Main simulator class
 # ---------------------------------------------------------------------------
@@ -183,19 +146,10 @@ class TournamentSimulator:
         self._master_rng = np.random.default_rng(self.config.random_seed)
         self._groups = WC2026_GROUPS
 
-        # Pre-allocate result storage for the full run
-        # Shape: (n_runs, n_teams, n_rounds) — allocated once, reused
         all_teams = list(set(t for g in self._groups.values() for t in g))
         self._n_teams = len(all_teams)
         self._teams_index = {t: i for i, t in enumerate(sorted(all_teams))}
         self._teams_list = sorted(all_teams)
-
-        # Pre-allocate numpy arrays — memory optimization
-        # Vectorized across all simulations simultaneously
-        self._results_buffer = np.zeros(
-            (self.config.n_runs, self._n_teams, len(self.ROUND_ORDER)),
-            dtype=self._dtype
-        )
 
         # Build Cholesky factor for correlated team shocks
         C = _build_correlation_matrix(self._teams_list)
@@ -204,6 +158,15 @@ class TournamentSimulator:
         except np.linalg.LinAlgError:
             logger.warning("Correlation matrix not PD; using identity (no correlation).")
             self._chol = np.eye(self._n_teams, dtype=self._dtype)
+
+        # Cache RefereeBiasAnalyzer so simulate_match doesn't re-instantiate
+        # it (and reload its referee database) on every call.
+        try:
+            from oracle.referee_bias import RefereeBiasAnalyzer
+            self._referee_bias_analyzer = RefereeBiasAnalyzer()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug("RefereeBiasAnalyzer unavailable: %s", e)
+            self._referee_bias_analyzer = None
 
         logger.info(
             "TournamentSimulator initialized: %d runs, %d teams, %s precision, "
@@ -220,10 +183,8 @@ class TournamentSimulator:
         -------
         float   Memory usage in megabytes (MB).
         """
-        buffer_bytes = self._results_buffer.nbytes
-        chol_bytes   = self._chol.nbytes
-        total_bytes  = buffer_bytes + chol_bytes
-        return round(total_bytes / (1024 ** 2), 2)
+        chol_bytes  = self._chol.nbytes
+        return round(chol_bytes / (1024 ** 2), 2)
 
     # ------------------------------------------------------------------
     # Match simulation — VECTORIZED
@@ -302,10 +263,9 @@ class TournamentSimulator:
         referee_bias_mag  = 0.0
 
         # --- Referee bias adjustment ---
-        if referee:
+        if referee and self._referee_bias_analyzer is not None:
             try:
-                from oracle.referee_bias import RefereeBiasAnalyzer
-                rba = RefereeBiasAnalyzer()
+                rba = self._referee_bias_analyzer
                 bias = rba.get_match_bias_factor(
                     referee, team_a, team_b,
                     base_prob_a=win_prob_a,
@@ -349,6 +309,12 @@ class TournamentSimulator:
         Each group plays a round-robin (6 matches per 4-team group).
         Points: win=3, draw=1, loss=0. Tiebreaker: goal difference
         (sampled from Poisson), then head-to-head result.
+
+        Note: this method is intentionally written as a per-match loop
+        because group standings have sequential dependencies (points
+        accumulate, then tiebreakers apply). Each individual Poisson draw
+        is still a single vectorized numpy call. Cross-match vectorization
+        across the whole group is a future enhancement.
 
         Parameters
         ----------
@@ -490,17 +456,23 @@ class TournamentSimulator:
         for round_name in round_names:
             if len(remaining) < 2:
                 break
-            # Pair strongest vs weakest (seeded bracket)
+            # Pair strongest vs weakest using mirror pairing on the seeded
+            # list: 1st vs last, 2nd vs second-last, etc. This produces a
+            # proper single-elimination bracket without bottom-half rematches.
             next_round: list[str] = []
-            for i in range(0, len(remaining), 2):
-                if i + 1 >= len(remaining):
-                    next_round.append(remaining[i])
-                    round_results[remaining[i]] = round_name
-                    continue
+            n = len(remaining)
+            # Handle odd team count (defensive): odd one out gets a bye.
+            if n % 2 == 1:
+                bye = remaining[n // 2]
+                round_results[bye] = round_name
+                next_round.append(bye)
+                pair_count = n // 2
+            else:
+                pair_count = n // 2
+
+            for i in range(pair_count):
                 ta = remaining[i]
-                tb = remaining[len(remaining) - 1 - (i // 2)]
-                if ta == tb:
-                    tb = remaining[i + 1]
+                tb = remaining[n - 1 - i]
                 winner = self._simulate_ko_match(ta, tb, scores, rng)
                 loser  = tb if winner == ta else ta
                 round_results[winner] = round_name
@@ -550,7 +522,6 @@ class TournamentSimulator:
             "quarter_final": 3, "semi_final": 4, "final": 5, "winner": 6,
         }
         outcome: dict[str, dict[str, bool]] = {}
-        all_teams = list(groups[next(iter(groups))]) + []
         all_teams = [t for grp in groups.values() for t in grp]
 
         for team in all_teams:
@@ -585,12 +556,13 @@ class TournamentSimulator:
         """
         Run N full tournament simulations and return probability distributions.
 
-        Uses ProcessPoolExecutor to parallelize across CPU cores. Each worker
-        receives a deterministic seed derived from the master seed for full
-        reproducibility.
+        Runs are executed sequentially in the current implementation; each
+        run receives a deterministic seed derived from the master seed for
+        full reproducibility. Cross-run parallelism (ProcessPoolExecutor)
+        is a future enhancement.
 
-        Memory management: results are accumulated into the pre-allocated
-        self._results_buffer (float32) and then mean-aggregated.
+        Memory management: a local reach-array (float32) is allocated for
+        this call, populated per run, and then mean-aggregated across runs.
 
         Parameters
         ----------
@@ -603,7 +575,9 @@ class TournamentSimulator:
         pd.DataFrame
             Index: team names. Columns: champion_prob, finalist_prob,
             semi_finalist_prob, quarter_finalist_prob, round_of_16_prob,
-            group_exit_prob, composite_score. Sorted by champion_prob desc.
+            not_reaching_r16_prob, composite_score. Sorted by champion_prob desc.
+            (not_reaching_r16_prob = 1 − round_of_16_prob; covers group-stage
+            exits and, in formats with a Round of 32, R32 exits too.)
         """
         n_runs  = n_runs  or self.config.n_runs
         groups  = groups  or self._groups
@@ -616,11 +590,11 @@ class TournamentSimulator:
         ROUNDS = ["winner", "final", "semi_final", "quarter_final", "round_of_16", "group_stage"]
         reach = np.zeros((n_runs, n_teams, len(ROUNDS)), dtype=np.float32)
 
-        logger.info("Starting %d-run tournament simulation (%.1f MB pre-allocated)...",
+        logger.info("Starting %d-run tournament simulation (Cholesky %.1f MB)...",
                     n_runs, self.memory_usage_mb())
         t0 = time.perf_counter()
 
-        # Sequential simulation (parallel via ProcessPoolExecutor if configured)
+        # Sequential simulation — each run is independent and deterministic
         rng = np.random.default_rng(self.config.random_seed)
 
         for run_i in range(n_runs):
@@ -647,17 +621,20 @@ class TournamentSimulator:
             semi_p        = float(mean_probs[t_i, 2])  # semi_final
             quarter_p     = float(mean_probs[t_i, 3])  # quarter_final
             r16_p         = float(mean_probs[t_i, 4])  # round_of_16
-            group_p       = 1.0 - float(mean_probs[t_i, 4])  # group exit
+            # "Did not reach Round of 16" — covers both group-stage exits and,
+            # in formats with a Round of 32, exits at that round too. The
+            # column name reflects this generalised semantics.
+            not_r16_p     = 1.0 - r16_p
 
             rows.append({
-                "team":                  team,
-                "champion_prob":         round(champion_p, 4),
-                "finalist_prob":         round(finalist_p, 4),
-                "semi_finalist_prob":    round(semi_p, 4),
-                "quarter_finalist_prob": round(quarter_p, 4),
-                "round_of_16_prob":      round(r16_p, 4),
-                "group_exit_prob":       round(max(0.0, group_p), 4),
-                "composite_score":       round(scores.get(team, 0.0), 4),
+                "team":                    team,
+                "champion_prob":           round(champion_p, 4),
+                "finalist_prob":           round(finalist_p, 4),
+                "semi_finalist_prob":      round(semi_p, 4),
+                "quarter_finalist_prob":   round(quarter_p, 4),
+                "round_of_16_prob":        round(r16_p, 4),
+                "not_reaching_r16_prob":   round(max(0.0, not_r16_p), 4),
+                "composite_score":         round(scores.get(team, 0.0), 4),
             })
 
         df = pd.DataFrame(rows).sort_values("champion_prob", ascending=False)
@@ -677,6 +654,7 @@ class TournamentSimulator:
         scores: dict[str, float],
         n_runs: int = 5_000,
         weight_delta: float = 0.20,
+        world_bank_data: Optional[dict[str, dict]] = None,
     ) -> dict:
         """
         Show how a team's championship probability changes as each signal
@@ -698,6 +676,11 @@ class TournamentSimulator:
         scores : dict[str, float]   Baseline composite scores.
         n_runs : int                Simulations per weight variant (5k for speed).
         weight_delta : float        Fractional weight change (0.20 = 20%).
+        world_bank_data : dict, optional
+            GDP / population context passed through to score_all_teams so that
+            re-scored variants use the same macro inputs as the baseline run.
+            If omitted, score_all_teams falls back to its defaults (which may
+            differ from the macro data used to build the baseline scores).
 
         Returns
         -------
@@ -735,9 +718,10 @@ class TournamentSimulator:
                     modified[d] = base_weights[d] / other_sum * remaining_budget
                 modified[target_dim] = new_target
 
-                # Recompute scores with modified weights
+                # Recompute scores with modified weights, using the same
+                # World Bank macro data as the baseline run (if provided).
                 scorer = TeamStrengthScorer(custom_weights=modified)
-                new_scores = scorer.score_all_teams()
+                new_scores = scorer.score_all_teams(world_bank_data=world_bank_data)
 
                 # Simulate
                 df = self.run_tournament(new_scores, n_runs=n_runs)
