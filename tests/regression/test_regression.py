@@ -133,6 +133,8 @@ class TestTournamentRegression:
     def test_qatar_lowest_champion_prob(self, bt):
         """Qatar should be one of the 3 lowest champion probabilities."""
         probs = bt._results["champion_probs"]
-        bottom3 = sorted(probs, key=lambda t: probs[t])[:3]
-        assert "Qatar" in bottom3, \
-            f"Qatar not in bottom 3 champion probs; bottom3={bottom3}"
+        # Equal simulated probabilities share a rank; do not break ties by
+        # dictionary insertion order.
+        cutoff = sorted(probs.values())[2]
+        assert probs["Qatar"] <= cutoff, \
+            f"Qatar probability {probs['Qatar']} exceeds bottom-three cutoff {cutoff}"

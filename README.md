@@ -38,10 +38,18 @@ python -m backtest.wc2022_backtest
 python -m backtest.wc2018_backtest
 ```
 
-The legacy tests are not all passing. The 2026-09-19 audit on Python 3.14
-recorded 26 failures and 9 passes using
-`python -m pytest -q --continue-on-collection-errors`.
-Static example forecasts and implied test-success badges are not validation.
+The full suite is not green. The 2026-09-19 follow-up on Python 3.14 recorded
+34 passes and 8 failures using `python -m pytest -q`, with no collection
+errors or skipped tests. Imports, compilation, and all three script smoke
+checks pass. Remaining failures concern missing Qatar scorer inputs,
+Brazil's historical rank, and four unchanged probability hypotheses.
+
+Shared generic-engine repairs now complete the knockout, report reached
+rounds correctly, and preserve referee draw mass. Examples compute output
+rather than print fabricated forecasts; the benchmark uses the real API and
+correct memory units. The generic 48-team scenario advances only 24 teams
+with byes, not an official 2026 bracket. These repairs do not change the
+separate historical replay results above.
 
 ## Current development
 
@@ -52,4 +60,4 @@ documents the current results, hindsight limitations, xG tie correction,
 and separate simulation paths. v1/v2 remain baselines, not silently upgraded
 copies of trials.
 
-Maintained by [fatehaszaman](https://github.com/fatehaszaman). License: MIT.
+Maintained by [fatehaszaman](https://github.com/fatehaszaman).

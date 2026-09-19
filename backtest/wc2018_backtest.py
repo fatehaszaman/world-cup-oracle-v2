@@ -364,10 +364,10 @@ class WC2018Backtest:
             "passed":        total_pts >= 45,
             "predicted_winner": pred_win,
             "actual_winner":    actual_win,
-            "missed_r16":  list(actual_r16   - pred_r16),
-            "missed_qf":   list(actual_qf    - pred_qf),
-            "missed_sf":   list(actual_sf    - pred_sf),
-            "missed_final":list(actual_final - pred_final),
+            "missed_r16":  sorted(actual_r16   - pred_r16),
+            "missed_qf":   sorted(actual_qf    - pred_qf),
+            "missed_sf":   sorted(actual_sf    - pred_sf),
+            "missed_final":sorted(actual_final - pred_final),
         }
 
     def upset_detection_report(self, sim_results: dict) -> list[dict]:

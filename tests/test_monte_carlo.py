@@ -1,160 +1,109 @@
+"""Tests of the implemented simulator API, retaining legacy model hypotheses.
+
+Technical checks are not evidence of predictive calibration. Seeded referee
+fixtures isolate the adjustment from random sampling and real-world narratives.
 """
-tests/test_monte_carlo.py — pytest unit tests for oracle.monte_carlo.
-"""
-
-from __future__ import annotations
-
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-import pytest
 import numpy as np
+import pytest
+from oracle.monte_carlo import TournamentSimulator
 from oracle.team_strength import TeamStrengthScorer
+from oracle.bracket import WC2026_GROUPS
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
 def team_scores():
-    scorer = TeamStrengthScorer()
-    return scorer.score_all_teams()
+    return TeamStrengthScorer().score_all_teams()
 
 
-@pytest.fixture(scope="module")
-def simple_scores():
-    """Minimal score dict for fast unit testing."""
-    return {
-        "TeamA": type("S", (), {"composite": 0.80})(),
-        "TeamB": type("S", (), {"composite": 0.50})(),
-    }
+def match(scores, a="Argentina", b="Brazil", n=1000, delta=None):
+    sim = TournamentSimulator()
+    if delta is not None:
+        class Bias:
+            def get_match_bias_factor(self, *args, base_prob_a, **kwargs):
+                p = base_prob_a + delta
+                return {"adjusted_prob_a": p, "adjusted_prob_b": 1 - p,
+                        "bias_magnitude": abs(delta)}
+        sim._referee_bias_analyzer = Bias()
+    return sim.simulate_match(a, b, scores, n_simulations=n,
+                              referee="fixture" if delta is not None else None,
+                              rng=np.random.default_rng(42))
 
-
-# ---------------------------------------------------------------------------
-# Single-match simulation
-# ---------------------------------------------------------------------------
 
 class TestSingleMatchSimulation:
-    def test_probabilities_sum_to_one(self):
-        """P(A wins) + P(B wins) + P(draw) must equal 1.0."""
-        from oracle.monte_carlo import MonteCarloSimulator
-        scorer = TeamStrengthScorer()
-        scores = scorer.score_all_teams()
-        sim = MonteCarloSimulator(team_scores=scores)
+    def test_probabilities_sum_to_one(self, team_scores):
+        r = match(team_scores)
+        assert sum(r[k] for k in ("win_prob_a", "win_prob_b", "draw_prob")) == pytest.approx(1, abs=2e-6)
 
-        result = sim.simulate_single_match("Argentina", "Brazil", n_simulations=1000)
-        total = result["p_home_win"] + result["p_away_win"] + result["p_draw"]
-        assert abs(total - 1.0) < 0.005, \
-            f"Probabilities sum to {total}, expected ~1.0"
+    def test_stronger_team_wins_more_often(self, team_scores):
+        # Original >50% expectation is retained, not relaxed. The absent
+        # Qatar input is surfaced rather than silently testing a fallback.
+        assert "Qatar" in team_scores, "Qatar is absent from the scorer input table"
+        assert match(team_scores, "Argentina", "Qatar", 5000)["win_prob_a"] > 0.50
 
-    def test_stronger_team_wins_more_often(self):
-        """Argentina should beat Qatar more than half the time."""
-        from oracle.monte_carlo import MonteCarloSimulator
-        scorer = TeamStrengthScorer()
-        scores = scorer.score_all_teams()
-        sim = MonteCarloSimulator(team_scores=scores)
+    def test_probabilities_in_unit_interval(self, team_scores):
+        r = match(team_scores, "France", "Morocco")
+        for k in ("win_prob_a", "win_prob_b", "draw_prob"):
+            assert 0 <= r[k] <= 1
 
-        result = sim.simulate_single_match("Argentina", "Qatar", n_simulations=5000)
-        assert result["p_home_win"] > 0.50, \
-            f"Argentina should win >50% vs Qatar; got {result['p_home_win']:.2f}"
-
-    def test_probabilities_in_unit_interval(self):
-        from oracle.monte_carlo import MonteCarloSimulator
-        scorer = TeamStrengthScorer()
-        scores = scorer.score_all_teams()
-        sim = MonteCarloSimulator(team_scores=scores)
-
-        result = sim.simulate_single_match("France", "Morocco", n_simulations=1000)
-        for key in ("p_home_win", "p_away_win", "p_draw"):
-            assert 0.0 <= result[key] <= 1.0, \
-                f"{key}={result[key]} out of [0,1]"
-
-
-# ---------------------------------------------------------------------------
-# Tournament simulation
-# ---------------------------------------------------------------------------
 
 class TestTournamentSimulation:
-    def test_1000_run_returns_all_32_teams(self, team_scores):
-        """Every team should appear at least once in 1000 simulation champion counts."""
-        from oracle.monte_carlo import MonteCarloSimulator
-        sim = MonteCarloSimulator(team_scores=team_scores)
-        results = sim.run_tournament(n_simulations=1000)
-
-        all_teams = set(team_scores.keys())
-        # Every team should have a champion_probs entry (can be 0)
-        assert set(results.champion_probs.keys()) >= all_teams or \
-               len(results.champion_probs) >= 30, \
-               "Tournament results should include all/most 32 teams"
+    def test_1000_run_returns_all_scenario_teams(self, team_scores):
+        df = TournamentSimulator().run_tournament(team_scores, n_runs=1000)
+        assert set(df["team"]) == {t for g in WC2026_GROUPS.values() for t in g}
+        assert len(df) == 48
 
     def test_champion_probs_sum_to_one(self, team_scores):
-        from oracle.monte_carlo import MonteCarloSimulator
-        sim = MonteCarloSimulator(team_scores=team_scores)
-        results = sim.run_tournament(n_simulations=500)
-
-        total = sum(results.champion_probs.values())
-        assert abs(total - 1.0) < 0.02, \
-            f"Champion probs sum to {total:.4f}, expected ~1.0"
+        df = TournamentSimulator().run_tournament(team_scores, n_runs=500)
+        assert abs(df["champion_prob"].sum() - 1) < 0.02
 
     def test_strong_teams_have_higher_champion_prob(self, team_scores):
-        from oracle.monte_carlo import MonteCarloSimulator
-        sim = MonteCarloSimulator(team_scores=team_scores)
-        results = sim.run_tournament(n_simulations=2000)
-
-        probs = results.champion_probs
-        # Argentina or France or Brazil should be top 3
-        sorted_teams = sorted(probs, key=lambda t: -probs.get(t, 0))[:3]
+        df = TournamentSimulator().run_tournament(team_scores, n_runs=2000)
+        top3 = set(df.nlargest(3, "champion_prob")["team"])
         strong = {"Argentina", "France", "Brazil", "England", "Spain"}
-        assert len(strong & set(sorted_teams)) >= 2, \
-            f"Expected strong teams in top 3; got {sorted_teams}"
+        assert len(strong & top3) >= 2, f"Expected strong teams in top 3; got {top3}"
 
-
-# ---------------------------------------------------------------------------
-# Referee bias adjustment
-# ---------------------------------------------------------------------------
 
 class TestRefereeBiasAdjustment:
-    def test_referee_bias_modifies_probabilities(self):
-        """
-        Applying a strict referee profile should shift probabilities
-        away from the baseline (strict refs tend to equalise by awarding
-        more penalties to underdogs).
-        """
-        from oracle.monte_carlo import MonteCarloSimulator
-        scorer = TeamStrengthScorer()
-        scores = scorer.score_all_teams()
-        sim = MonteCarloSimulator(team_scores=scores)
+    def test_referee_bias_modifies_probabilities(self, team_scores):
+        baseline = match(team_scores, n=3000)
+        biased = match(team_scores, n=3000, delta=0.1)
+        assert biased["referee_adjusted"]
+        assert abs(baseline["win_prob_a"] - biased["win_prob_a"]) > 0.005
+        assert biased["draw_prob"] == baseline["draw_prob"]
+        assert sum(biased[k] for k in ("win_prob_a", "win_prob_b", "draw_prob")) == pytest.approx(1, abs=2e-6)
 
-        baseline = sim.simulate_single_match("Argentina", "Qatar", n_simulations=3000)
+    def test_zero_bias_matches_baseline(self, team_scores):
+        baseline = match(team_scores, n=2000)
+        neutral = match(team_scores, n=2000, delta=0)
+        assert neutral["referee_adjusted"]
+        for k in ("win_prob_a", "win_prob_b", "draw_prob"):
+            assert neutral[k] == baseline[k]
 
-        # Simulate with a high-strictness referee config
-        high_strict = sim.simulate_single_match(
-            "Argentina", "Qatar",
-            n_simulations=3000,
-            referee_bias={"penalties_per_game": 1.2, "strictness": "strict"},
-        )
 
-        # The win probabilities should differ between the two
-        diff = abs(baseline["p_home_win"] - high_strict["p_home_win"])
-        assert diff > 0.005, \
-            f"Referee bias should change p_home_win; diff={diff:.4f}"
+@pytest.mark.parametrize("n", [2, 3, 8, 16, 24, 32])
+def test_knockout_eliminates_every_nonchampion_once(n):
+    sim = TournamentSimulator()
+    teams = {f"Team{i}": "1st" for i in range(n)}
+    scores = {team: 0.5 for team in teams}
+    matches = []
+    def fixture(a, b, scores, rng):
+        assert a != b
+        matches.append((a, b))
+        return b
+    sim._simulate_ko_match = fixture
+    result = sim.simulate_knockout(teams, scores, np.random.default_rng(42))
+    assert len(matches) == n - 1
+    assert len({a for a, b in matches}) == n - 1  # fixture always eliminates A
+    assert set(result) == set(teams)
+    assert [t for t, stage in result.items() if stage == "winner"] == [matches[-1][1]]
+    assert sum(stage in ("final", "winner") for stage in result.values()) == 2
 
-    def test_zero_bias_matches_baseline(self):
-        """Passing no bias or zero bias should produce similar results."""
-        from oracle.monte_carlo import MonteCarloSimulator
-        scorer = TeamStrengthScorer()
-        scores = scorer.score_all_teams()
-        sim = MonteCarloSimulator(team_scores=scores)
 
-        result1 = sim.simulate_single_match("France", "Croatia", n_simulations=2000)
-        result2 = sim.simulate_single_match(
-            "France", "Croatia",
-            n_simulations=2000,
-            referee_bias={"penalties_per_game": 0.25, "strictness": "average"},
-        )
-        # Results should be close (not identical due to RNG, but within 5%)
-        diff = abs(result1["p_home_win"] - result2["p_home_win"])
-        assert diff < 0.10, \
-            f"Average-bias should produce similar result to no-bias; diff={diff:.4f}"
+def test_eight_team_bracket_records_reaching_not_winning_round():
+    sim = TournamentSimulator()
+    teams = {f"Team{i}": "1st" for i in range(8)}
+    r = sim.simulate_knockout(teams, {}, np.random.default_rng(42))
+    assert sum(stage == "quarter_final" for stage in r.values()) == 4
+    assert sum(stage == "semi_final" for stage in r.values()) == 2
+    assert sum(stage == "final" for stage in r.values()) == 1
+    assert sum(stage == "winner" for stage in r.values()) == 1

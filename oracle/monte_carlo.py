@@ -1,35 +1,16 @@
 """
-oracle/monte_carlo.py — Vectorized Monte Carlo tournament simulator.
+Generic experimental tournament simulator, not an official 2026 forecast.
 
-BUSINESS SUMMARY
-----------------
-This module simulates the entire 2026 World Cup 50,000 times in one shot.
-Rather than predicting a single "most likely" winner, it builds a full
-probability distribution over every possible outcome — who wins the
-tournament, who reaches the semis, which group-stage exits are likely.
-Running 50k simulations gives confidence intervals tight enough that
-championship probabilities are accurate to ±0.5 percentage points.
+Match sampling is vectorized; tournament runs are sequential. The default
+groups are static scenario inputs. This legacy engine advances the top two
+from each of twelve groups into a simplified 24-team knockout with byes,
+not the official 32-team knockout. Its round labels are abstractions.
+The separate trials WC2026Forecast implements a different 48-to-32 scenario.
 
-DEVELOPER NOTES
----------------
-Performance engineering:
-  - simulate_match is vectorized across n_simulations using numpy Poisson
-    draws. The per-match hot path contains no Python loops.
-  - Correlated shocks use Cholesky decomposition of a team-correlation
-    matrix so that strong teams fail together (tournament upsets tend to
-    cluster around referee/weather conditions affecting all matches in a day).
-  - Poisson goal sampling uses numpy's built-in vectorized Poisson RNG.
-  - Tournament runs are executed sequentially in the current implementation;
-    each run is independent and seeded deterministically from the master RNG.
-    Cross-run parallelism (ProcessPoolExecutor) is a future enhancement.
-  - Memory: result arrays are allocated in float32 (half the memory of
-    float64, sufficient for probability estimates to 4 decimal places).
-
-Complexity:
-  - simulate_match (vectorized): O(n_simulations) — ~5µs per 10k simulations
-  - simulate_group_stage: O(n_groups × 6 × n_simulations) — dominated by Poisson
-  - run_tournament: O(n_runs × log(n_teams)) — bottleneck is the bracket tree
-  - Full 50k run target: < 10 seconds on 4-core hardware
+More simulations reduce sampling variation within the assumed model, not
+model error or data uncertainty. No accuracy or runtime guarantee is made.
+The optional match-level referee adjustment is not a tournament assignment
+system. Correlation coefficients and strength inputs remain heuristic.
 """
 
 from __future__ import annotations
@@ -113,16 +94,14 @@ def _build_correlation_matrix(teams: list[str]) -> np.ndarray:
 
 class TournamentSimulator:
     """
-    Vectorized Monte Carlo simulator for the 2026 FIFA World Cup.
+    Generic static-scenario simulator with vectorized match sampling.
 
-    Uses numpy vectorization, Cholesky-correlated noise, and optional
-    ProcessPoolExecutor parallelism to simulate 50,000 full tournaments
-    efficiently.
+    Tournament runs are sequential. See the module-level format limitations.
 
     Parameters
     ----------
     config : SimulationConfig
-        Full simulation configuration envelope (seeds, parallelism, flags).
+        Simulation settings; parallelism flags are not implemented.
 
     Key methods
     -----------
@@ -266,17 +245,19 @@ class TournamentSimulator:
         if referee and self._referee_bias_analyzer is not None:
             try:
                 rba = self._referee_bias_analyzer
+                decisive_mass = win_prob_a + win_prob_b
+                if decisive_mass <= 0:
+                    raise ValueError("No decisive outcomes available for referee adjustment")
                 bias = rba.get_match_bias_factor(
                     referee, team_a, team_b,
-                    base_prob_a=win_prob_a,
+                    base_prob_a=win_prob_a / decisive_mass,
                     team_a_strength=score_a,
                     team_b_strength=score_b,
                 )
-                # Re-normalise after applying bias
+                # Adjust conditional win probabilities without deleting draws.
                 total = bias["adjusted_prob_a"] + bias["adjusted_prob_b"]
-                win_prob_a       = bias["adjusted_prob_a"] / total
-                win_prob_b       = bias["adjusted_prob_b"] / total
-                draw_prob        = max(0.0, 1.0 - win_prob_a - win_prob_b)
+                win_prob_a       = decisive_mass * bias["adjusted_prob_a"] / total
+                win_prob_b       = decisive_mass * bias["adjusted_prob_b"] / total
                 referee_adjusted = True
                 referee_bias_mag = bias["bias_magnitude"]
             except Exception as e:
@@ -363,7 +344,7 @@ class TournamentSimulator:
 
             sorted_teams = sorted(
                 teams,
-                key=lambda t: (pts[t], gd[t], scores.get(t, 0.0)),
+                key=lambda t: (pts[t], gd[t], scores.get(t, 0.50)),
                 reverse=True,
             )
             standings[group_id] = sorted_teams
@@ -425,13 +406,11 @@ class TournamentSimulator:
         rng: Optional[np.random.Generator] = None,
     ) -> dict[str, str]:
         """
-        Simulate the full knockout bracket (R32 → R16 → QF → SF → Final).
+        Simulate single elimination for up to 32 entrants.
 
-        2026 format: 48 teams → 32 advance (top 2 from each of 12 groups
-        + 8 best 3rd-place teams) → R32 → R16 → QF → SF → Final.
-
-        This simplified version takes the 16 advancing teams for
-        the R16 (standard 32-team implementation mirrors historical format).
+        Entrants are seeded by input strength. If their count is not a power
+        of two, highest seeds receive first-round byes. Continue until exactly
+        one champion remains. These are scenario seedings, not official rules.
 
         Parameters
         ----------
@@ -446,39 +425,30 @@ class TournamentSimulator:
         if rng is None:
             rng = np.random.default_rng(int(self._master_rng.integers(0, 2**31)))
 
-        round_results: dict[str, str] = {t: "group_stage" for t in advancing_teams}
+        if len(advancing_teams) > 32:
+            raise ValueError("This knockout implementation supports at most 32 entrants")
+        round_results: dict[str, str] = {}
         remaining = list(advancing_teams.keys())
 
         # Seed by composite score for a plausible bracket (strongest vs weakest)
-        remaining.sort(key=lambda t: scores.get(t, 0.0), reverse=True)
+        remaining.sort(key=lambda t: scores.get(t, 0.50), reverse=True)
 
-        round_names = ["round_of_16", "quarter_final", "semi_final", "final"]
-        for round_name in round_names:
-            if len(remaining) < 2:
-                break
-            # Pair strongest vs weakest using mirror pairing on the seeded
-            # list: 1st vs last, 2nd vs second-last, etc. This produces a
-            # proper single-elimination bracket without bottom-half rematches.
-            next_round: list[str] = []
+        round_names = {32: "round_of_32", 16: "round_of_16",
+                       8: "quarter_final", 4: "semi_final", 2: "final"}
+        while len(remaining) > 1:
             n = len(remaining)
-            # Handle odd team count (defensive): odd one out gets a bye.
-            if n % 2 == 1:
-                bye = remaining[n // 2]
-                round_results[bye] = round_name
-                next_round.append(bye)
-                pair_count = n // 2
-            else:
-                pair_count = n // 2
-
-            for i in range(pair_count):
-                ta = remaining[i]
-                tb = remaining[n - 1 - i]
+            bracket_size = 1 << (n - 1).bit_length()
+            round_name = round_names[bracket_size]
+            for team in remaining:
+                round_results[team] = round_name
+            byes = bracket_size - n
+            next_round = remaining[:byes]
+            playing = remaining[byes:]
+            for i in range(len(playing) // 2):
+                ta = playing[i]
+                tb = playing[-1 - i]
                 winner = self._simulate_ko_match(ta, tb, scores, rng)
-                loser  = tb if winner == ta else ta
-                round_results[winner] = round_name
-                round_results[loser]  = round_results.get(loser, round_name)
                 next_round.append(winner)
-
             remaining = next_round
 
         if remaining:
@@ -573,7 +543,7 @@ class TournamentSimulator:
         Returns
         -------
         pd.DataFrame
-            Index: team names. Columns: champion_prob, finalist_prob,
+            Integer index; team names in the team column. Columns: champion_prob, finalist_prob,
             semi_finalist_prob, quarter_finalist_prob, round_of_16_prob,
             not_reaching_r16_prob, composite_score. Sorted by champion_prob desc.
             (not_reaching_r16_prob = 1 − round_of_16_prob; covers group-stage
@@ -634,7 +604,7 @@ class TournamentSimulator:
                 "quarter_finalist_prob":   round(quarter_p, 4),
                 "round_of_16_prob":        round(r16_p, 4),
                 "not_reaching_r16_prob":   round(max(0.0, not_r16_p), 4),
-                "composite_score":         round(scores.get(team, 0.0), 4),
+                "composite_score":         round(scores.get(team, 0.50), 4),
             })
 
         df = pd.DataFrame(rows).sort_values("champion_prob", ascending=False)

@@ -1,32 +1,14 @@
 """
-oracle/bracket.py — 2026 FIFA World Cup bracket manager with event-driven state machine.
+Experimental bracket state and event handlers.
 
-BUSINESS SUMMARY
-----------------
-The 2026 World Cup is the first to feature 48 teams across 16 groups (A–L
-plus extensions for the expanded format). This module manages the tournament
-bracket: which teams are in which group, how they advance, and how the
-knockout bracket is seeded. It also implements an event-driven state machine —
-every match result fires an immutable TournamentEvent that updates the bracket
-state, making the simulation fully auditable and replayable.
+WC2026_GROUPS is a legacy synthetic scenario with twelve groups of four.
+It is not a verified official draw, qualification list, or current data feed.
+The generic simulator advances only the top two per group and uses knockout
+byes; it does not implement an official 48-to-32 bracket. The dedicated
+trials WC2026Forecast uses a different, also static, scenario.
 
-DEVELOPER NOTES
----------------
-Architecture: event-driven state machine using a FIFO event queue.
-  - Events are dataclass instances (TournamentEvent from oracle.schemas).
-  - The bracket state is a dict updated by event handlers.
-  - Handlers are registered by event type — adding new side-effects
-    (logging, referee assignment, venue routing) requires only a new handler
-    registration, not touching match logic.
-
-2026 Format:
-  - 48 teams in 16 groups of 3 (A–P)
-  - Top 1 from each group (16 teams) + 8 best 2nd-place teams → R32 (24 teams)
-  - This implementation uses a simplified 32-team format for backward
-    compatibility with standard WC simulation patterns, with Group A–L
-    mapping to 12 groups of 4 for the 48-team draw.
-
-Complexity: O(T log T) for group sorting, O(1) for event dispatch.
+Events update mutable bracket state. A dataclass event by itself is not an
+immutable persisted event log or proof of complete replayability.
 """
 
 from __future__ import annotations
@@ -42,9 +24,7 @@ from oracle.schemas import TournamentEvent, TournamentEventType, RoundName, Matc
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# 2026 FIFA World Cup Groups
-# 48-team tournament; using 12 groups of 4 (A–L) for simulation
-# Teams reflect confirmed/projected 2026 qualified nations as of April 2026
+# Legacy synthetic scenario: twelve groups of four, not verified qualifiers.
 # ---------------------------------------------------------------------------
 WC2026_GROUPS: dict[str, list[str]] = {
     "A": ["United States", "Mexico", "Canada", "Uruguay"],
