@@ -1,295 +1,55 @@
-# world-cup-oracle — v2
+# World Cup Oracle: v2 Experiment
 
-![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-2.0-orange)
-![Backtest](https://img.shields.io/badge/2022_WC_backtest-BPS_40%2F64_FAIL-red)
+This repository proposes dimension reweighting after an unsuccessful baseline.
+Its scored 2022 replay still uses the same fixed team-strength table as v1:
+the proposed reweighting is not connected to that evaluation.
 
-> **Multi-factor 2026 FIFA World Cup prediction engine — revised after backtesting against the 2022 World Cup.**
-> v1 scored 40/64 on the Bracket Prediction Score (BPS). This repo documents what went wrong, and (see Known Issue below) honestly reports that the proposed fix was never actually wired into the scored backtest.
+## Verified results
 
----
+| Replay | Simulations | Seed | BPS | Historical threshold | Predicted champion |
+|---|---:|---:|---:|---|---|
+| 2022 | 50,000 | 42 | 40/64 | Below 45/64 | France |
+| 2018 | 50,000 | 2018 | 25/64 | Below 45/64 | Germany |
 
-## Known Issue — Corrected 2026-09-19
+The 2022 stage points are 12 + 12 + 6 + 10 + 0 = 40.
+The 2018 stage points are 14 + 8 + 3 + 0 + 0 = 25.
+These are historical model replays, not held-out forecasting accuracy.
 
-The previously published claim that v2 fixes the 2022 backtest and scores 48/64 PASS was false, and was never produced by actually running the code. Details:
+## Acknowledging my mistake
 
-- `backtest/wc2022_backtest.py`'s hardcoded team-strength table (`_TEAM_STRENGTH_2022`) is byte-for-byte identical to v1's. The reweighted `DIMENSION_WEIGHTS` in `config.py` — the entire point of v2 — were never wired into this backtest.
-- The cross-tournament summary previously printed the literal string `~48` and a `PASS` marker for the 2022 v2 row. That was never computed from a real run; it was a hardcoded placeholder left in from planning.
-- The README's own BPS table below (14+14+9+10+10 = 57) did not even match the 48 badge/text next to it — a second, independent inconsistency on top of the fabricated figure.
+I previously published a 48/64 PASS claim, a separate table summing to 57,
+and a hardcoded `~48 PASS` report without verifying them against executable
+results. Those claims are withdrawn. The actual 2022 result is 40/64, not
+48 or 57. The report now computes the 2022 row rather than printing a placeholder.
 
-The real, verified number: running the 2022 backtest in this repo produces 40/64 FAIL, identical to v1, because v2's 2022 backtest never actually used the reweighted dimensions. We fixed the code so the cross-tournament summary now imports and runs the real 2022 backtest live instead of printing a fabricated number (see `print_validation_report()` in `backtest/wc2018_backtest.py`).
+The proposed outcome table is removed from the current README because
+hand-derived targets should not sit beside actual results as if comparable.
+The earlier claims remain visible in Git history. Reweighting requires
+period-appropriate features and a leakage-controlled evaluation before any
+improvement can be claimed.
 
-What this means: the dimension-reweighting idea in the table below is a genuine, reasoned hypothesis from real failure analysis, but it has not been validated against the 2022 bracket, because it was never connected to a scored backtest. Wiring `DIMENSION_WEIGHTS` into a real 2022 team-strength composite (using period-appropriate data instead of the fixed table) is tracked as follow-up work, not yet done.
-
----
-
-## Why v2 Exists
-
-This repository is the second iteration of `world-cup-oracle`. v1 was built from first principles, backtested against the complete 2022 World Cup bracket, and **failed the 45/64 BPS threshold** with a score of **40/64**.
-
-The model correctly predicted:
-- Both finalists (Argentina and France)
-- 12/16 Round of 16 qualifiers
-- 6/8 quarterfinalists
-- 8/8 major upsets flagged above 20% probability
-
-But it got the **winner wrong** (predicted France, actual Argentina) and **missed 2 quarterfinalists** — Brazil and Germany both overrated due to squad market value bias.
-
-v2 **proposes** reweighting the five signal dimensions based on this failure analysis. As documented in the Known Issue above, that reweighting was never wired into the scored 2022 backtest, so it remains an untested proposal, not a verified result.
-
----
-
-## v1 vs v2: What Changed
-
-| Signal Dimension    | v1 Weight | v2 Weight | Change  | Why                                                                 |
-|---------------------|-----------|-----------|---------|---------------------------------------------------------------------|
-| Squad Market Value  | 0.30      | **0.26**  | −0.04   | Over-favoured high-value squads. France (€1,050M) rated above Argentina (€870M) despite similar tactical quality. Germany (€980M) rated too high despite group-stage exit. |
-| Positional Power    | 0.25      | **0.30**  | +0.05   | Tactical organisation matters more than raw transfer value. Japan's 5-4-1 low-block beat Germany and Spain. Morocco's defensive structure beat Portugal. |
-| Country Resources   | 0.15      | **0.13**  | −0.02   | GDP/population penalised diaspora-heavy squads. Morocco draws from French, Spanish, and Dutch leagues — their talent pipeline is not GDP-constrained. |
-| Historical Perf.    | 0.20      | **0.22**  | +0.02   | Tournament pedigree was slightly underweighted. Argentina's 2014 final appearance and 2022 Copa América were strong signals. |
-| Commercial Signal   | 0.10      | **0.09**  | −0.01   | Brand value over-inflated Brazil's QF survival probability. Croatia's penalty shootout ability isn't captured by shirt deal values. |
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                   DATA SOURCES                          │
-│  World Bank API  │  API-Football  │  Hardcoded 2026    │
-└────────┬─────────┴───────┬────────┴─────────┬──────────┘
-         │                 │                  │
-         ▼                 ▼                  ▼
-┌─────────────────────────────────────────────────────────┐
-│              FEATURE ENGINEERING (7 Dimensions)         │
-│                                                         │
-│  squad_value (0.26)    positional_power (0.30)          │
-│  country_resources (0.13)  historical (0.22)            │
-│  commercial (0.09)                                      │
-│                                                         │
-│  psychological_state = (psych×1.0 + physical×1.5) / 2.5│
-│  referee_bias  ──── applied as match-level multiplier   │
-└────────────────────────┬────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│          MONTE CARLO TOURNAMENT SIMULATOR               │
-│  50,000 full tournament runs (vectorised numpy)         │
-│  Poisson goal model + Cholesky correlated shocks        │
-│  Event-driven bracket state machine                     │
-│  Referee assignment → bias-adjusted win probabilities   │
-└────────────────────────┬────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│                    OUTPUTS                              │
-│  Championship probability table (all 32 teams)          │
-│  Bracket progression (R16 / QF / SF / Final %)          │
-│  Psychological State Report (readiness composites)      │
-│  Referee Risk Report (bias flags per assignment)        │
-│  Upset Danger Games (>25% upset probability)            │
-└─────────────────────────────────────────────────────────┘
-```
-
----
-
-## 2022 World Cup Backtest: v1 vs v2
-
-### Bracket Prediction Score (BPS)
-> Points: R16 correct qualifier = 1pt, QF = 2pt, SF = 3pt, Finalist = 5pt, Winner = 10pt. Max = 64.
-
-| Stage        | v1 Correct | v1 Pts | v2 proposed* | v2 proposed* Pts |
-|--------------|-----------|--------|-----------|--------|
-| R16 (×1pt)   | 12/16     | 12     | 14/16     | 14     |
-| QF (×2pt)    | 6/8       | 12     | 7/8       | 14     |
-| SF (×3pt)    | 2/4       | 6      | 3/4       | 9      |
-| Finalist (×5)| 2/2       | 10     | 2/2       | 10     |
-| Winner (×10) | 0/1       | 0      | 1/1       | 10     |
-| **Total (proposed, unverified)** |  | **40** |  | **57** |
-| **Threshold**|           | **45** |           | **45** |
-| **Result**   |           | ✗ FAIL |           | (never run — see Known Issue) |
-
-*\*The "v2 proposed" column is the outcome the reweighting was **hoped** to produce, hand-derived by the original failure analysis — not an actual backtest run. Note it sums to 57, not the 48 previously badged elsewhere; that mismatch was never caught because the number was never computed. The only number this repo has actually verified by running code is v1's 40/64 FAIL, which v2's real (unmodified) 2022 backtest also reproduces exactly.*
-
-### Upset Detection (both versions)
-All 8 major upsets were flagged above 20% by both v1 and v2:
-
-| Match                        | Stage  | Model Prob |
-|------------------------------|--------|-----------|
-| Saudi Arabia beat Argentina  | Group  | 20.3%     |
-| Japan beat Germany           | Group  | 36.9%     |
-| Japan beat Spain             | Group  | 35.6%     |
-| Morocco beat Belgium         | Group  | 35.8%     |
-| Morocco beat Spain (pens)    | R16    | 33.8%     |
-| Morocco beat Portugal        | QF     | 32.8%     |
-| Croatia beat Brazil (pens)   | QF     | 40.9%     |
-| Australia beat Denmark       | Group  | 35.0%     |
-
----
-
-## Key Signal Dimensions
-
-### 1. Positional Power (0.30 — highest weight in v2)
-Named player ratings per position per team. Example for Argentina 2022:
-- GK: E. Martínez (91), CB: Romero (87)/Otamendi (83), CM: De Paul (86)/Mac Allister (84), FW: Messi (97)/Lautaro (87)
-
-### 2. Psychological State Model
-```python
-readiness_composite = (psych_score × 1.0 + physical_score × 1.5) / 2.5
-```
-Factors: bereavement (-15), public manager fallout (-12), revenge motivation (+12), legacy final tournament (+10), family attending confirmed (+8), tournament debutant age <22 (+6), sophomore curse (-4).
-
-### 3. Referee Bias Profiles (real data)
-| Referee | Pen/Game | YC/Game | Notable |
-|---|---|---|---|
-| Szymon Marciniak | 0.44 | 4.07 | 2022 WC Final, 2023 UCL Final |
-| Clément Turpin | 0.53 | 3.25 | Record 31 pens in 58 UCL matches |
-| Daniele Orsato | 0.26 | 4.69 | Modrić: "one of the worst" (2022 WC SF) |
-| Felix Zwayer | 0.03 | 4.24 | 6-month ban (2006 match-fixing link) |
-| Istvan Kovacs | 0.24 | 5.12 | Strictest card rate in dataset |
-
-### 4. 2026 Venue Conditions
-16 stadiums across USA/Canada/Mexico. Key altitude factors:
-- Estadio Azteca, Mexico City: **2,240m** — major altitude disadvantage for non-acclimatized teams
-- Guadalajara: **1,566m** — moderate
-- All other US/Canada venues: near sea level
-
-### 5. Family Attendance Signal
-2026 WC is in North America. Family access varies by team:
-- Western European teams: easy travel, **+8 readiness**
-- South American teams: moderate (10hr flights), **+5**
-- African teams (Morocco, Senegal): long travel + visa friction, **−3 to −5**
-- Asian teams (Japan, South Korea): extreme distance, **−3**
-
----
-
-## Quickstart
+## Run
 
 ```bash
-git clone https://github.com/fatehaszaman/world-cup-oracle-v2
+git clone https://github.com/fatehaszaman/world-cup-oracle-v2.git
 cd world-cup-oracle-v2
-pip install -r requirements.txt
-cp .env.example .env  # add your API keys (optional — falls back to hardcoded data)
-
-# Run 2026 prediction
-python examples/run_prediction.py
-
-# Run 2022 backtest validation
-python examples/run_backtest.py
+python -m pip install -r requirements.txt
+python -m backtest.wc2022_backtest
+python -m backtest.wc2018_backtest
 ```
 
-### Sample Output
-```
-Championship Probabilities (50,000 simulations, v2 weights)
-┌─────────────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
-│ Team            │ Win %    │ Final %  │ Semi %   │ QF %     │ R16 %    │
-├─────────────────┼──────────┼──────────┼──────────┼──────────┼──────────┤
-│ Argentina       │  18.4%   │  31.2%   │  52.1%   │  71.3%   │  91.2%   │
-│ France          │  15.9%   │  28.7%   │  49.8%   │  69.1%   │  90.4%   │
-│ Brazil          │  13.2%   │  24.1%   │  44.6%   │  66.8%   │  89.7%   │
-│ England         │  11.7%   │  21.8%   │  41.2%   │  63.4%   │  87.9%   │
-│ Spain           │   9.8%   │  18.9%   │  37.6%   │  59.2%   │  85.3%   │
-│ Morocco         │   6.4%   │  13.2%   │  28.9%   │  51.7%   │  79.8%   │
-└─────────────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
-```
+The legacy tests are not all passing. The 2026-09-19 audit on Python 3.14
+recorded 26 failures and 9 passes using
+`python -m pytest -q --continue-on-collection-errors`.
+Static example forecasts and implied test-success badges are not validation.
 
----
+## Current development
 
-## Project Structure
+The latest bracket/market/xG evaluation and optional referee-dampening work
+is in [world-cup-oracle-trials](https://github.com/fatehaszaman/world-cup-oracle-trials).
+Its [audit](https://github.com/fatehaszaman/world-cup-oracle-trials/blob/main/AUDIT.md)
+documents the current results, hindsight limitations, xG tie correction,
+and separate simulation paths. v1/v2 remain baselines, not silently upgraded
+copies of trials.
 
-```
-world-cup-oracle-v2/
-├── oracle/
-│   ├── team_strength.py        # 5-dimension composite scorer
-│   ├── monte_carlo.py          # 50k-run vectorised tournament simulator
-│   ├── positional_power.py     # Named player ratings, 32 teams
-│   ├── psychological_state_model.py  # Life events, family, experience
-│   ├── referee_bias.py         # Real referee stats + bias profiles
-│   ├── sponsorship_model.py    # Commercial signal scorer
-│   ├── bracket.py              # 2026 WC bracket + advancement rules
-│   ├── form_analyzer.py        # Last 10 matches, H2H records
-│   ├── calibration.py          # ECE, MCE, isotonic calibration
-│   ├── upset_detector.py       # Historical upsets, logistic model
-│   ├── hyperparameter_tuner.py # Grid search on Brier score
-│   └── weather_altitude.py     # 2026 venue altitude/temp conditions
-├── backtest/
-│   ├── wc2022_backtest.py      # Full 2022 WC backtest (BPS scoring)
-│   └── model_diff.py           # v1→v2 failure analysis + weight proposals
-├── data/
-│   ├── world_bank_client.py    # World Bank API (GDP, population)
-│   ├── api_football_client.py  # API-Football via RapidAPI
-│   └── referee_stats_fetcher.py
-├── examples/
-│   ├── run_prediction.py       # Full 2026 prediction demo
-│   └── run_backtest.py         # 2022 backtest + v2 comparison
-├── tests/
-│   ├── test_team_strength.py
-│   ├── test_monte_carlo.py
-│   └── regression/
-│       └── test_regression.py  # 10 regression cases
-├── scripts/benchmark.py        # Performance benchmark
-├── config.py                   # All weights and constants (v2)
-├── requirements.txt
-└── .env.example
-```
-
----
-
-## Related
-- [`world-cup-oracle`](https://github.com/fatehaszaman/world-cup-oracle) — v1 (BPS 40/64, documents the initial model and failure analysis)
-
-## License
-MIT
-
----
-
-## CHANGELOG
-
-### Engineering fixes (latest)
-- **Brazil FB starter** corrected from `Trent Alexander-Arnold` (copy-paste from England) to `Danilo` / `Guilherme Arana`. FB rating 91 → 84.
-- **Weight validation** now raises `ValueError` instead of using `assert` (asserts are stripped under `python -O` / `PYTHONOPTIMIZE=1`).
-- **`SponsorshipValuator`** is now constructed once on `TeamStrengthScorer.__init__` and cached, instead of being re-instantiated ~32 times per `score_all_teams()` call.
-- **Unknown-team fallback** unified across all sub-scorers via `config.UNKNOWN_TEAM_DEFAULT_SCORE = 0.40`. Previously squad_value→0.30, positional→0.55, historical→0.0.
-- **`HISTORICAL_RESULTS` list order** is now explicitly documented as oldest → newest (i.e. `[2006, 2010, 2014, 2018, 2022]`).
-
-### New (opt-in)
-- **`oracle/rating_distribution.py`** — turns each player rating into a `Normal(mean, sigma)` distribution sampled by the Monte Carlo engine. Lets MC propagate *rating uncertainty* on top of match-outcome randomness instead of treating ratings as zero-variance point estimates. Position-specific priors: GK 1.8, CB 2.0, FB 2.3, CM 2.5, AM 3.0, FW 3.2.
-
----
-
-## 2018 World Cup Backtest (v2)
-
-> Cross-tournament validation: does the v2 model generalise to a different World Cup era?
-
-### Bracket Prediction Score (BPS) — 2018
-
-| Stage        | Correct | Max | Pts |
-|--------------|---------|-----|-----|
-| R16 (×1pt)   | 14/16   | 16  | 14  |
-| QF (×2pt)    | 4/8     | 16  | 8   |
-| SF (×3pt)    | 1/4     | 12  | 3   |
-| Finalist (×5)| 0/2     | 10  | 0   |
-| Winner (×10) | 0/1     | 10  | 0   |
-| **Total**    |         | **64** | **25** |
-| **Result**   |         |     | ✗ **FAIL** |
-
-**Winner predicted:** Germany — **Actual:** France (4–2 Croatia)
-
-### Root Cause Analysis
-The v2 model failed 2018 for two structural reasons:
-
-1. **Recency bias in squad values** — Germany's 2014 champion roster still carried high squad-value scores despite key retirements. The model had no age-decay or form-cycle correction to detect a team past its peak.
-2. **Penalty-shootout blindspot** — Croatia's path to the final required winning three consecutive knockout shootouts (Denmark R16, Russia QF, England SF). The model's match-simulation assigns probabilities based on 90-minute composite scores; it has no shootout-specialist or clutch-performance coefficient.
-
-### Cross-Tournament Validation Summary
-
-| Tournament      | Model | BPS | /64 | Pass? |
-|-----------------|-------|-----|-----|-------|
-| 2022 World Cup  | v1    | 40  | 64  | ✗ FAIL |
-| 2022 World Cup  | v2 (live, verified) | 40 | 64 | ✗ FAIL |
-| 2018 World Cup  | v2    | 25  | 64  | ✗ FAIL |
-
-> The 2022 v2 row is now computed live by `print_validation_report()` rather than hardcoded — see the Known Issue section above. It matches v1 because v2's dimension reweighting isn't wired into this backtest yet.
-
-> 2018 failure motivates further work on age-decay curves, form-cycle detection, and a shootout-specialist coefficient to address both root causes above.
+Maintained by [fatehaszaman](https://github.com/fatehaszaman). License: MIT.
