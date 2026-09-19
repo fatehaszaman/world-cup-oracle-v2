@@ -456,6 +456,21 @@ class WC2018Backtest:
         print("=" * 64)
 
         # Cross-tournament summary
+        #
+        # CORRECTED 2026-09-19: this table previously hardcoded the 2022 v2
+        # row as "~48 / PASS" -- a literal string, never computed from a
+        # real run. In fact backtest/wc2022_backtest.py's team-strength
+        # table (_TEAM_STRENGTH_2022) is byte-identical to v1's and is NOT
+        # derived from the reweighted DIMENSION_WEIGHTS in config.py, so the
+        # v2 dimension reweighting described in the README was never
+        # actually wired into the 2022 backtest. Running it for real
+        # produces the same 40/64 FAIL as v1. This block now imports and
+        # runs that backtest live instead of printing a fabricated number.
+        from backtest.wc2022_backtest import WC2022Backtest
+        bt_2022 = WC2022Backtest(n_simulations=50_000)
+        bt_2022.run()
+        bps_2022 = bt_2022.bracket_progression_score()
+
         print()
         print("  ┌─────────────────────────────────────────────────────┐")
         print("  │  Cross-Tournament Validation Summary                │")
@@ -464,9 +479,14 @@ class WC2018Backtest:
         print("  ├─────────────────────────────┼───────┼──────┼───────┤")
         print("  │  2018 World Cup (this run)  │  {:>3}  │  64  │  {}   │".format(
             bps["total_pts"], "✓" if bps["passed"] else "✗"))
-        print("  │  2022 World Cup (v1)        │   40  │  64  │  ✗    │")
-        print("  │  2022 World Cup (v2)        │  ~48  │  64  │  ✓    │")
+        print("  │  2022 World Cup (v1)        │  {:>3}  │  64  │  {}   │".format(
+            bps_2022["total"]["pts"], "✓" if bps_2022["pass"] else "✗"))
+        print("  │  2022 World Cup (v2, live)  │  {:>3}  │  64  │  {}   │".format(
+            bps_2022["total"]["pts"], "✓" if bps_2022["pass"] else "✗"))
         print("  └─────────────────────────────┴───────┴──────┴───────┘")
+        print("  Note: v1 and v2 rows are identical -- the 2022 backtest's")
+        print("  team-strength table is not yet wired to the reweighted")
+        print("  DIMENSION_WEIGHTS. See README 'Known Issue' section.")
         print()
 
 

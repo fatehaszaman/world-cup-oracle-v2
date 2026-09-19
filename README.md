@@ -3,10 +3,24 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Version](https://img.shields.io/badge/version-2.0-orange)
-![Backtest](https://img.shields.io/badge/2022_WC_backtest-BPS_48%2F64-brightgreen)
+![Backtest](https://img.shields.io/badge/2022_WC_backtest-BPS_40%2F64_FAIL-red)
 
 > **Multi-factor 2026 FIFA World Cup prediction engine — revised after backtesting against the 2022 World Cup.**
-> v1 scored 40/64 on the Bracket Prediction Score (BPS). This repo documents what went wrong and how v2 fixes it.
+> v1 scored 40/64 on the Bracket Prediction Score (BPS). This repo documents what went wrong, and (see Known Issue below) honestly reports that the proposed fix was never actually wired into the scored backtest.
+
+---
+
+## Known Issue — Corrected 2026-09-19
+
+The previously published claim that v2 fixes the 2022 backtest and scores 48/64 PASS was false, and was never produced by actually running the code. Details:
+
+- `backtest/wc2022_backtest.py`'s hardcoded team-strength table (`_TEAM_STRENGTH_2022`) is byte-for-byte identical to v1's. The reweighted `DIMENSION_WEIGHTS` in `config.py` — the entire point of v2 — were never wired into this backtest.
+- The cross-tournament summary previously printed the literal string `~48` and a `PASS` marker for the 2022 v2 row. That was never computed from a real run; it was a hardcoded placeholder left in from planning.
+- The README's own BPS table below (14+14+9+10+10 = 57) did not even match the 48 badge/text next to it — a second, independent inconsistency on top of the fabricated figure.
+
+The real, verified number: running the 2022 backtest in this repo produces 40/64 FAIL, identical to v1, because v2's 2022 backtest never actually used the reweighted dimensions. We fixed the code so the cross-tournament summary now imports and runs the real 2022 backtest live instead of printing a fabricated number (see `print_validation_report()` in `backtest/wc2018_backtest.py`).
+
+What this means: the dimension-reweighting idea in the table below is a genuine, reasoned hypothesis from real failure analysis, but it has not been validated against the 2022 bracket, because it was never connected to a scored backtest. Wiring `DIMENSION_WEIGHTS` into a real 2022 team-strength composite (using period-appropriate data instead of the fixed table) is tracked as follow-up work, not yet done.
 
 ---
 
@@ -22,7 +36,7 @@ The model correctly predicted:
 
 But it got the **winner wrong** (predicted France, actual Argentina) and **missed 2 quarterfinalists** — Brazil and Germany both overrated due to squad market value bias.
 
-v2 reweights the five signal dimensions based on the failure analysis and re-runs the full backtest.
+v2 **proposes** reweighting the five signal dimensions based on this failure analysis. As documented in the Known Issue above, that reweighting was never wired into the scored 2022 backtest, so it remains an untested proposal, not a verified result.
 
 ---
 
@@ -85,16 +99,18 @@ v2 reweights the five signal dimensions based on the failure analysis and re-run
 ### Bracket Prediction Score (BPS)
 > Points: R16 correct qualifier = 1pt, QF = 2pt, SF = 3pt, Finalist = 5pt, Winner = 10pt. Max = 64.
 
-| Stage        | v1 Correct | v1 Pts | v2 Correct | v2 Pts |
+| Stage        | v1 Correct | v1 Pts | v2 proposed* | v2 proposed* Pts |
 |--------------|-----------|--------|-----------|--------|
 | R16 (×1pt)   | 12/16     | 12     | 14/16     | 14     |
 | QF (×2pt)    | 6/8       | 12     | 7/8       | 14     |
 | SF (×3pt)    | 2/4       | 6      | 3/4       | 9      |
 | Finalist (×5)| 2/2       | 10     | 2/2       | 10     |
 | Winner (×10) | 0/1       | 0      | 1/1       | 10     |
-| **Total**    |           | **40** |           | **~48**|
+| **Total (proposed, unverified)** |  | **40** |  | **57** |
 | **Threshold**|           | **45** |           | **45** |
-| **Result**   |           | ✗ FAIL |           | **✓ PASS** |
+| **Result**   |           | ✗ FAIL |           | (never run — see Known Issue) |
+
+*\*The "v2 proposed" column is the outcome the reweighting was **hoped** to produce, hand-derived by the original failure analysis — not an actual backtest run. Note it sums to 57, not the 48 previously badged elsewhere; that mismatch was never caught because the number was never computed. The only number this repo has actually verified by running code is v1's 40/64 FAIL, which v2's real (unmodified) 2022 backtest also reproduces exactly.*
 
 ### Upset Detection (both versions)
 All 8 major upsets were flagged above 20% by both v1 and v2:
@@ -271,7 +287,9 @@ The v2 model failed 2018 for two structural reasons:
 | Tournament      | Model | BPS | /64 | Pass? |
 |-----------------|-------|-----|-----|-------|
 | 2022 World Cup  | v1    | 40  | 64  | ✗ FAIL |
-| 2022 World Cup  | v2    | ~48 | 64  | ✓ PASS |
+| 2022 World Cup  | v2 (live, verified) | 40 | 64 | ✗ FAIL |
 | 2018 World Cup  | v2    | 25  | 64  | ✗ FAIL |
 
-> 2018 failure motivates **[world-cup-oracle-v3](https://github.com/fatehaszaman/world-cup-oracle-v3)**, which adds age-decay curves, form-cycle detection, and a shootout-specialist coefficient to address both root causes above.
+> The 2022 v2 row is now computed live by `print_validation_report()` rather than hardcoded — see the Known Issue section above. It matches v1 because v2's dimension reweighting isn't wired into this backtest yet.
+
+> 2018 failure motivates further work on age-decay curves, form-cycle detection, and a shootout-specialist coefficient to address both root causes above.
