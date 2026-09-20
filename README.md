@@ -1,5 +1,7 @@
 # World Cup Oracle: v2 Experiment
 
+[Algorithm guide: pseudocode, time complexity, and memory](docs/ALGORITHM_GUIDE.md).
+
 This repository proposes dimension reweighting after an unsuccessful baseline.
 Its scored 2022 replay still uses the same fixed team-strength table as v1:
 the proposed reweighting is not connected to that evaluation.
