@@ -1,5 +1,7 @@
 # World Cup Oracle: v2 Experiment
 
+> **LLM evaluation sandbox:** this repository contains deliberate errors alongside documented real errors in code, documentation, and SDLC artifacts (tests, CI, READMEs, and change history), used to test whether a model or judge catches them and follows instructions.
+
 [Algorithm guide: pseudocode, time complexity, and memory](docs/ALGORITHM_GUIDE.md).
 
 This repository proposes dimension reweighting after an unsuccessful baseline.
