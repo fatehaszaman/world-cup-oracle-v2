@@ -30,6 +30,10 @@ The earlier claims remain visible in Git history. Reweighting requires
 period-appropriate features and a leakage-controlled evaluation before any
 improvement can be claimed.
 
+## What I learned
+
+I published 2022 scores (48/64, and separately 51/64 on all seeds) before verifying them against executable runs. The reproducible 2022 result is 40/64. I withdrew the earlier claims publicly and kept them in Git history. Every figure in this README now comes from a scripted run, and replays are labeled as historical, not forecasting accuracy. See [LESSONS.md](https://github.com/fatehaszaman/world-cup-oracle-trials/blob/main/LESSONS.md) for the cause, the fix, and the commits.
+
 ## Run
 
 ```bash
