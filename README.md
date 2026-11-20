@@ -21,10 +21,9 @@ These are historical model replays, not held-out forecasting accuracy.
 
 ## Acknowledging my mistake
 
-I previously published a 48/64 PASS claim, a separate table summing to 57,
-and a hardcoded `~48 PASS` report without verifying them against executable
-results. Those claims are withdrawn. The actual 2022 result is 40/64, not
-48 or 57. The report now computes the 2022 row rather than printing a placeholder.
+I previously published a 2022 PASS claim, a separate hand-derived table,
+and a hardcoded PASS report without verifying them against executable
+results. Those claims are withdrawn. The actual 2022 result is 40/64. The report now computes the 2022 row rather than printing a placeholder.
 
 The proposed outcome table is removed from the current README because
 hand-derived targets should not sit beside actual results as if comparable.
@@ -34,7 +33,7 @@ improvement can be claimed.
 
 ## What I learned
 
-I published 2022 scores (48/64, and separately 51/64 on all seeds) before verifying them against executable runs. The reproducible 2022 result is 40/64. I withdrew the earlier claims publicly and kept them in Git history. Every figure in this README now comes from a scripted run, and replays are labeled as historical, not forecasting accuracy. See [LESSONS.md](https://github.com/fatehaszaman/world-cup-oracle-trials/blob/main/LESSONS.md) for the cause, the fix, and the commits.
+I published 2022 scores before verifying them against executable runs. Running `python -m backtest.wc2022_backtest` on this code produces 40/64 for 2022, and `python -m backtest.wc2018_backtest` produces 25/64 for 2018. I withdrew the earlier figures and kept them, labeled as withdrawn, in the trials repository's [CHANGELOG](https://github.com/fatehaszaman/world-cup-oracle-trials/blob/main/CHANGELOG.md) and Git history. Every figure in this README now comes from a scripted run, and replays are labeled as historical, not forecasting accuracy. See [LESSONS.md](https://github.com/fatehaszaman/world-cup-oracle-trials/blob/main/LESSONS.md) for the cause, the fix, and the commits.
 
 ## Run
 

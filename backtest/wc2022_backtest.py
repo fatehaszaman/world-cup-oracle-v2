@@ -498,3 +498,10 @@ class WC2022Backtest:
                   f"({u['stage']:6s})  model: {u['upset_prob_pct']:5.1f}%")
 
         print("\n" + "=" * 64 + "\n")
+
+
+if __name__ == "__main__":
+    print("Running 2022 World Cup backtest (50,000 simulations, seed 42)...")
+    bt = WC2022Backtest(n_simulations=50_000, seed=42)
+    bt.run()
+    bt.print_validation_report()
